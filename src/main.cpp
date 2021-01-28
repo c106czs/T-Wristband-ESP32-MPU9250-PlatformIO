@@ -4,17 +4,21 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <WiFi.h>
+#include <SPIFFS.h>
+#include <FS.h>
+#include <ArduinoJson.h>
 #include "sensor.h"
 #include "esp_adc_cal.h"
 #include "ttgo.h"
 #include "charge.h"
 
+using namespace fs;
+
 //  git clone -b development https://github.com/tzapu/WiFiManager.git
-#include <WiFiManager.h>         //https://github.com/tzapu/WiFiManager
+#include <WiFiManager.h> //https://github.com/tzapu/WiFiManager
 
-#define FACTORY_HW_TEST     //! Test RTC and WiFi scan when enabled
-#define ARDUINO_OTA_UPDATE      //! Enable this line OTA update
-
+// #define FACTORY_HW_TEST     //! Test RTC and WiFi scan when enabled
+#define ARDUINO_OTA_UPDATE //! Enable this line OTA update
 
 #ifdef ARDUINO_OTA_UPDATE
 #include <ESPmDNS.h>
@@ -22,23 +26,22 @@
 #include <ArduinoOTA.h>
 #endif
 
-
-#define TP_PIN_PIN          33
-#define I2C_SDA_PIN         21
-#define I2C_SCL_PIN         22
-#define IMU_INT_PIN         38
-#define RTC_INT_PIN         34
-#define BATT_ADC_PIN        35
-#define VBUS_PIN            36
-#define TP_PWR_PIN          25
-#define LED_PIN             4
-#define CHARGE_PIN          32
+#define TP_PIN_PIN 33
+#define I2C_SDA_PIN 21
+#define I2C_SCL_PIN 22
+#define IMU_INT_PIN 38
+#define RTC_INT_PIN 34
+#define BATT_ADC_PIN 35
+#define VBUS_PIN 36
+#define TP_PWR_PIN 25
+#define LED_PIN 4
+#define CHARGE_PIN 32
 
 extern MPU9250 IMU;
 
-TFT_eSPI tft = TFT_eSPI();  // Invoke library, pins defined in User_Setup.h
+TFT_eSPI tft = TFT_eSPI(); // Invoke library, pins defined in User_Setup.h
 PCF8563_Class rtc;
-WiFiManager wifiManager;
+WiFiManager wm;
 
 char buff[256];
 bool rtcIrq = false;
@@ -48,7 +51,7 @@ bool otaStart = false;
 uint8_t func_select = 0;
 uint8_t omm = 99;
 uint8_t xcolon = 0;
-uint32_t targetTime = 0;       // for next 1 second timeout
+uint32_t targetTime = 0; // for next 1 second timeout
 uint32_t colour = 0;
 int vref = 1100;
 
@@ -56,39 +59,33 @@ bool pressed = false;
 uint32_t pressedTime = 0;
 bool charge_indication = false;
 
-uint8_t hh, mm, ss ;
+uint8_t hh, mm, ss;
 
-void configModeCallback (WiFiManager *myWiFiManager)
-{
-    Serial.println("Entered config mode");
-    Serial.println(WiFi.softAPIP());
-    //if you used auto generated SSID, print it
-    Serial.println(myWiFiManager->getConfigPortalSSID());
-
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_WHITE);
-    tft.drawString("Connect hotspot name ",  20, tft.height() / 2 - 20);
-    tft.drawString("configure wrist",  35, tft.height() / 2  + 20);
-    tft.setTextColor(TFT_GREEN);
-    tft.drawString("\"T-Wristband\"",  40, tft.height() / 2 );
-
-}
+IPAddress serverIP;  //目标地址
+uint16_t serverPort; //目标服务器端口号
+WiFiClient client;   //声明一个客户端对象，用于与服务器进行连接
+char serverIP_str[16] = "192.168.0.2";
+char serverPort_str[6] = "9999";
 
 void scanI2Cdevice(void)
 {
     uint8_t err, addr;
     int nDevices = 0;
-    for (addr = 1; addr < 127; addr++) {
+    for (addr = 1; addr < 127; addr++)
+    {
         Wire.beginTransmission(addr);
         err = Wire.endTransmission();
-        if (err == 0) {
+        if (err == 0)
+        {
             Serial.print("I2C device found at address 0x");
             if (addr < 16)
                 Serial.print("0");
             Serial.print(addr, HEX);
             Serial.println(" !");
             nDevices++;
-        } else if (err == 4) {
+        }
+        else if (err == 4)
+        {
             Serial.print("Unknow error at address 0x");
             if (addr < 16)
                 Serial.print("0");
@@ -100,7 +97,6 @@ void scanI2Cdevice(void)
     else
         Serial.println("Done\n");
 }
-
 
 void wifi_scan()
 {
@@ -117,12 +113,16 @@ void wifi_scan()
 
     int16_t n = WiFi.scanNetworks();
     tft.fillScreen(TFT_BLACK);
-    if (n == 0) {
+    if (n == 0)
+    {
         tft.drawString("no networks found", tft.width() / 2, tft.height() / 2);
-    } else {
+    }
+    else
+    {
         tft.setTextDatum(TL_DATUM);
         tft.setCursor(0, 0);
-        for (int i = 0; i < n; ++i) {
+        for (int i = 0; i < n; ++i)
+        {
             sprintf(buff,
                     "[%d]:%s(%d)",
                     i + 1,
@@ -135,10 +135,10 @@ void wifi_scan()
     WiFi.mode(WIFI_OFF);
 }
 
-
 void drawProgressBar(uint16_t x0, uint16_t y0, uint16_t w, uint16_t h, uint8_t percentage, uint16_t frameColor, uint16_t barColor)
 {
-    if (percentage == 0) {
+    if (percentage == 0)
+    {
         tft.fillRoundRect(x0, y0, w, h, 3, TFT_BLACK);
     }
     uint8_t margin = 2;
@@ -147,7 +147,6 @@ void drawProgressBar(uint16_t x0, uint16_t y0, uint16_t w, uint16_t h, uint8_t p
     tft.drawRoundRect(x0, y0, w, h, 3, frameColor);
     tft.fillRect(x0 + margin, y0 + margin, barWidth * percentage / 100.0, barHeight, barColor);
 }
-
 
 void factoryTest()
 {
@@ -162,11 +161,14 @@ void factoryTest()
     rtc.setDateTime(yy, mm, dd, h, m, s);
     delay(500);
     RTC_Date dt = rtc.getDateTime();
-    if (dt.year != yy || dt.month != mm || dt.day != dd || dt.hour != h || dt.minute != m) {
+    if (dt.year != yy || dt.month != mm || dt.day != dd || dt.hour != h || dt.minute != m)
+    {
         tft.setTextColor(TFT_RED, TFT_BLACK);
         tft.fillScreen(TFT_BLACK);
         tft.drawString("Write DateTime FAIL", 0, 0);
-    } else {
+    }
+    else
+    {
         tft.setTextColor(TFT_GREEN, TFT_BLACK);
         tft.fillScreen(TFT_BLACK);
         tft.drawString("Write DateTime PASS", 0, 0);
@@ -176,9 +178,11 @@ void factoryTest()
 
     //! RTC Interrupt Test
     pinMode(RTC_INT_PIN, INPUT_PULLUP); //need change to rtc_pin
-    attachInterrupt(RTC_INT_PIN, [] {
-        rtcIrq = 1;
-    }, FALLING);
+    attachInterrupt(
+        RTC_INT_PIN, [] {
+            rtcIrq = 1;
+        },
+        FALLING);
 
     rtc.disableAlarm();
 
@@ -188,14 +192,16 @@ void factoryTest()
 
     rtc.enableAlarm();
 
-    for (;;) {
+    for (;;)
+    {
         snprintf(buff, sizeof(buff), "%s", rtc.formatDateTime());
         Serial.print("\t");
         Serial.println(buff);
         tft.fillScreen(TFT_BLACK);
         tft.drawString(buff, 0, 0);
 
-        if (rtcIrq) {
+        if (rtcIrq)
+        {
             rtcIrq = 0;
             detachInterrupt(RTC_INT_PIN);
             rtc.resetAlarm();
@@ -212,15 +218,125 @@ void factoryTest()
     delay(2000);
 }
 
+void setupSpiffs()
+{
+    //clean FS, for testing
+    // SPIFFS.format();
+    //read configuration from FS json
+    Serial.println("mounting FS...");
+    if (SPIFFS.begin(true))
+    {
+        Serial.println("mounted file system");
+        if (SPIFFS.exists("/config.json"))
+        {
+            //file exists, reading and loading
+            Serial.println("reading config file");
+            File configFile = SPIFFS.open("/config.json", "r");
+            if (configFile)
+            {
+                Serial.println("opened config file");
+                size_t size = configFile.size();
+                // Allocate a buffer to store contents of the file.
+                std::unique_ptr<char[]> buf(new char[size]);
+
+                configFile.readBytes(buf.get(), size);
+                DynamicJsonBuffer jsonBuffer;
+                JsonObject &json = jsonBuffer.parseObject(buf.get());
+                json.printTo(Serial);
+                if (json.success())
+                {
+                    Serial.println("\nparsed json");
+                    strcpy(serverIP_str, json["server_ip"]);
+                    strcpy(serverPort_str, json["server_port"]);
+                    serverIP.fromString(serverIP_str);
+                    serverPort = atoi(serverPort_str);
+                }
+                else
+                {
+                    Serial.println("failed to load json config");
+                }
+            }
+        }
+    }
+    else
+    {
+        Serial.println("failed to mount FS");
+    }
+    //end read
+}
+
+bool isWiFiConfigMode = false;
+//flag for saving data
+bool shouldSaveConfig = false;
+
+//callback notifying us of the need to save config
+void saveConfigCallback()
+{
+    Serial.println("Should save config");
+    shouldSaveConfig = true;
+}
+
 void setupWiFi()
 {
-#ifdef ARDUINO_OTA_UPDATE
-    WiFiManager wifiManager;
-    //set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
-    wifiManager.setAPCallback(configModeCallback);
-    wifiManager.setBreakAfterConfig(true);          // Without this saveConfigCallback does not get fired
-    wifiManager.autoConnect("T-Wristband");
-#endif
+    WiFi.mode(WIFI_STA);
+    wm.setSaveConfigCallback(saveConfigCallback);
+    //wm.setConfigPortalBlocking(false);
+    WiFiManagerParameter server_ip("server_ip", "Server IP Address", serverIP_str, 16);
+    WiFiManagerParameter server_port("server_port", "Server Port", serverPort_str, 6);
+    wm.addParameter(&server_ip);
+    wm.addParameter(&server_port);
+
+    //fetches ssid and pass and tries to connect
+    //if it does not connect it starts an access point with the specified name
+    //here  "AutoConnectAP"
+    //and goes into a blocking loop awaiting configuration
+    if (!wm.autoConnect())
+    {
+        Serial.println("failed to connect and hit timeout");
+        //reset and try again, or maybe put it to deep sleep
+        isWiFiConfigMode = true;
+        return;
+    }
+
+    //read updated parameters
+    strcpy(serverIP_str, server_ip.getValue());
+    strcpy(serverPort_str, server_port.getValue());
+
+    //save the custom parameters to FS
+    if (shouldSaveConfig)
+    {
+        Serial.println("saving config");
+        DynamicJsonBuffer jsonBuffer;
+        JsonObject &json = jsonBuffer.createObject();
+        json["server_ip"] = serverIP_str;
+        json["server_port"] = serverPort_str;
+
+        File configFile = SPIFFS.open("/config.json", "w");
+        if (!configFile)
+        {
+            Serial.println("failed to open config file for writing");
+        }
+        json.prettyPrintTo(Serial);
+        json.printTo(configFile);
+        configFile.close();
+        //end save
+        shouldSaveConfig = false;
+    }
+
+    //if you get here you have connected to the WiFi
+    Serial.printf("connected to %s \r\n", wm.getWiFiSSID().c_str());
+
+    // 成功连接WiFi，尝试使用NTP服务器校对时间，中国北京时间是东八区
+    configTime(8 * 3600, 0, "ntp.aliyun.com", "time1.cloud.tencent.com", "ntp.neu.edu.cn");
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo))
+    {
+        Serial.println("Failed to obtain time");
+        return;
+    }
+    Serial.println(&timeinfo, "%A, %Y-%m-%d %H:%M:%S");
+    // 把对时保存到RTC
+    rtc.setDateTime(timeinfo.tm_year, timeinfo.tm_mon, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
 }
 
 void setupOTA()
@@ -240,65 +356,74 @@ void setupOTA()
     // ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
 
     ArduinoOTA.onStart([]() {
-        String type;
-        if (ArduinoOTA.getCommand() == U_FLASH)
-            type = "sketch";
-        else // U_SPIFFS
-            type = "filesystem";
+                  String type;
+                  if (ArduinoOTA.getCommand() == U_FLASH)
+                      type = "sketch";
+                  else // U_SPIFFS
+                      type = "filesystem";
 
-        // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
-        Serial.println("Start updating " + type);
-        otaStart = true;
-        tft.fillScreen(TFT_BLACK);
-        tft.drawString("Updating...", tft.width() / 2 - 20, 55 );
-    })
-    .onEnd([]() {
-        Serial.println("\nEnd");
-        delay(500);
-    })
-    .onProgress([](unsigned int progress, unsigned int total) {
-        // Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-        int percentage = (progress / (total / 100));
-        tft.setTextDatum(TC_DATUM);
-        tft.setTextPadding(tft.textWidth(" 888% "));
-        tft.drawString(String(percentage) + "%", 145, 35);
-        drawProgressBar(10, 30, 120, 15, percentage, TFT_WHITE, TFT_BLUE);
-    })
-    .onError([](ota_error_t error) {
-        Serial.printf("Error[%u]: ", error);
-        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+                  // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+                  Serial.println("Start updating " + type);
+                  otaStart = true;
+                  tft.fillScreen(TFT_BLACK);
+                  tft.drawString("Updating...", tft.width() / 2 - 20, 55);
+              })
+        .onEnd([]() {
+            Serial.println("\nEnd");
+            delay(500);
+        })
+        .onProgress([](unsigned int progress, unsigned int total) {
+            // Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+            int percentage = (progress / (total / 100));
+            tft.setTextDatum(TC_DATUM);
+            tft.setTextPadding(tft.textWidth(" 888% "));
+            tft.drawString(String(percentage) + "%", 145, 35);
+            drawProgressBar(10, 30, 120, 15, percentage, TFT_WHITE, TFT_BLUE);
+        })
+        .onError([](ota_error_t error) {
+            Serial.printf("Error[%u]: ", error);
+            if (error == OTA_AUTH_ERROR)
+                Serial.println("Auth Failed");
+            else if (error == OTA_BEGIN_ERROR)
+                Serial.println("Begin Failed");
+            else if (error == OTA_CONNECT_ERROR)
+                Serial.println("Connect Failed");
+            else if (error == OTA_RECEIVE_ERROR)
+                Serial.println("Receive Failed");
+            else if (error == OTA_END_ERROR)
+                Serial.println("End Failed");
 
-        tft.fillScreen(TFT_BLACK);
-        tft.drawString("Update Failed", tft.width() / 2 - 20, 55 );
-        delay(3000);
-        otaStart = false;
-        initial = 1;
-        targetTime = millis() + 1000;
-        tft.fillScreen(TFT_BLACK);
-        tft.setTextDatum(TL_DATUM);
-        omm = 99;
-    });
+            tft.fillScreen(TFT_BLACK);
+            tft.drawString("Update Failed", tft.width() / 2 - 20, 55);
+            delay(3000);
+            otaStart = false;
+            initial = 1;
+            targetTime = millis() + 1000;
+            tft.fillScreen(TFT_BLACK);
+            tft.setTextDatum(TL_DATUM);
+            omm = 99;
+        });
 
     ArduinoOTA.begin();
 #endif
 }
-
 
 void setupADC()
 {
     esp_adc_cal_characteristics_t adc_chars;
     esp_adc_cal_value_t val_type = esp_adc_cal_characterize((adc_unit_t)ADC_UNIT_1, (adc_atten_t)ADC1_CHANNEL_6, (adc_bits_width_t)ADC_WIDTH_BIT_12, 1100, &adc_chars);
     //Check type of calibration value used to characterize ADC
-    if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
+    if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF)
+    {
         Serial.printf("eFuse Vref:%u mV", adc_chars.vref);
         vref = adc_chars.vref;
-    } else if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP) {
+    }
+    else if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP)
+    {
         Serial.printf("Two Point --> coeff_a:%umV coeff_b:%umV\n", adc_chars.coeff_a, adc_chars.coeff_b);
-    } else {
+    }
+    else
+    {
         Serial.println("Default Vref: 1100mV");
     }
 }
@@ -307,12 +432,94 @@ void setupRTC()
 {
     rtc.begin(Wire);
     //Check if the RTC clock matches, if not, use compile time
-    rtc.check();
+    //rtc.check();
 
     RTC_Date datetime = rtc.getDateTime();
     hh = datetime.hour;
     mm = datetime.minute;
     ss = datetime.second;
+}
+
+String getVoltage()
+{
+    uint16_t v = analogRead(BATT_ADC_PIN);
+    float battery_voltage = ((float)v / 4095.0) * 2.0 * 3.3 * (vref / 1000.0);
+    return String(battery_voltage) + "V";
+}
+
+void RTC_Show()
+{
+    if (targetTime < millis())
+    {
+        RTC_Date datetime = rtc.getDateTime();
+        hh = datetime.hour;
+        mm = datetime.minute;
+        ss = datetime.second;
+        // Serial.printf("hh:%d mm:%d ss:%d\n", hh, mm, ss);
+        targetTime = millis() + 1000;
+        if (ss == 0 || initial)
+        {
+            initial = 0;
+            tft.setTextColor(TFT_GREEN, TFT_BLACK);
+            tft.setCursor(8, 70);
+            tft.print(__DATE__); // This uses the standard ADAFruit small font
+        }
+
+        tft.setTextColor(TFT_BLUE, TFT_BLACK);
+        tft.drawCentreString(getVoltage(), 120, 70, 1); // Next size up font 2
+
+        // Update digital time
+        uint8_t xpos = 6;
+        uint8_t ypos = 13;
+        if (omm != mm)
+        { // Only redraw every minute to minimise flicker
+            // Uncomment ONE of the next 2 lines, using the ghost image demonstrates text overlay as time is drawn over it
+            tft.setTextColor(0x39C4, TFT_BLACK); // Leave a 7 segment ghost image, comment out next line!
+            //tft.setTextColor(TFT_BLACK, TFT_BLACK); // Set font colour to black to wipe image
+            // Font 7 is to show a pseudo 7 segment display.
+            // Font 7 only contains characters [space] 0 1 2 3 4 5 6 7 8 9 0 : .
+            tft.drawString("88:88", xpos, ypos, 7); // Overwrite the text to clear it
+            tft.setTextColor(0xFBE0, TFT_BLACK);    // Orange
+            omm = mm;
+
+            if (hh < 10)
+                xpos += tft.drawChar('0', xpos, ypos, 7);
+            xpos += tft.drawNumber(hh, xpos, ypos, 7);
+            xcolon = xpos;
+            xpos += tft.drawChar(':', xpos, ypos, 7);
+            if (mm < 10)
+                xpos += tft.drawChar('0', xpos, ypos, 7);
+            tft.drawNumber(mm, xpos, ypos, 7);
+        }
+
+        if (ss % 2)
+        { // Flash the colon
+            tft.setTextColor(0x39C4, TFT_BLACK);
+            xpos += tft.drawChar(':', xcolon, ypos, 7);
+            tft.setTextColor(0xFBE0, TFT_BLACK);
+        }
+        else
+        {
+            tft.drawChar(':', xcolon, ypos, 7);
+        }
+    }
+}
+
+void IMU_Show()
+{
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.setTextDatum(TL_DATUM);
+    tft.fillScreen(TFT_BLACK);
+    readMPU9250();
+    snprintf(buff, sizeof(buff), "--  ACC  GYR   MAG");
+    tft.drawString(buff, 2, 16);
+    snprintf(buff, sizeof(buff), "x %.2f  %.2f  %.2f", (int)1000 * IMU.ax, IMU.gx, IMU.mx);
+    tft.drawString(buff, 2, 32);
+    snprintf(buff, sizeof(buff), "y %.2f  %.2f  %.2f", (int)1000 * IMU.ay, IMU.gy, IMU.my);
+    tft.drawString(buff, 2, 48);
+    snprintf(buff, sizeof(buff), "z %.2f  %.2f  %.2f", (int)1000 * IMU.az, IMU.gz, IMU.mz);
+    tft.drawString(buff, 2, 64);
+    delay(200);
 }
 
 void setup(void)
@@ -322,7 +529,7 @@ void setup(void)
     tft.init();
     tft.setRotation(1);
     tft.setSwapBytes(true);
-    tft.pushImage(0, 0,  160, 80, ttgo);
+    tft.pushImage(0, 0, 160, 80, ttgo);
 
     Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
     Wire.setClock(400000);
@@ -336,6 +543,8 @@ void setup(void)
     setupMPU9250();
 
     setupADC();
+
+    setupSpiffs();
 
     setupWiFi();
 
@@ -355,93 +564,44 @@ void setup(void)
     pinMode(LED_PIN, OUTPUT);
 
     pinMode(CHARGE_PIN, INPUT_PULLUP);
-    attachInterrupt(CHARGE_PIN, [] {
-        charge_indication = true;
-    }, CHANGE);
+    attachInterrupt(
+        CHARGE_PIN, [] {
+            charge_indication = true;
+        },
+        CHANGE);
 
-    if (digitalRead(CHARGE_PIN) == LOW) {
+    if (digitalRead(CHARGE_PIN) == LOW)
+    {
         charge_indication = true;
     }
+    serverIP.fromString(serverIP_str);
+    serverPort = atoi(serverPort_str);
+    Serial.printf("Server IP = %s, Server Port = %d", serverIP.toString().c_str(), serverPort);
 }
 
-String getVoltage()
+// 通过TCP/IP协议发送IMU数据
+void sendIMUData()
 {
-    uint16_t v = analogRead(BATT_ADC_PIN);
-    float battery_voltage = ((float)v / 4095.0) * 2.0 * 3.3 * (vref / 1000.0);
-    return String(battery_voltage) + "V";
-}
-
-void RTC_Show()
-{
-    if (targetTime < millis()) {
-        RTC_Date datetime = rtc.getDateTime();
-        hh = datetime.hour;
-        mm = datetime.minute;
-        ss = datetime.second;
-        // Serial.printf("hh:%d mm:%d ss:%d\n", hh, mm, ss);
-        targetTime = millis() + 1000;
-        if (ss == 0 || initial) {
-            initial = 0;
-            tft.setTextColor(TFT_GREEN, TFT_BLACK);
-            tft.setCursor (8, 60);
-            tft.print(__DATE__); // This uses the standard ADAFruit small font
+    // 尝试连接主机服务器，超时设置5秒
+    if (client.connect(serverIP, serverPort, 5))
+    {
+        if (client.connected())
+        {
+            readMPU9250();
+            snprintf(buff, sizeof(buff), "%llx,%f,%f,%f,%f,%f,%f,%f,%f,%f\r\n", ESP.getEfuseMac(), IMU.ax, IMU.ay, IMU.az, IMU.gx, IMU.gy, IMU.gz, IMU.mx, IMU.my, IMU.mz);
+            client.write(buff);
         }
-
-        tft.setTextColor(TFT_BLUE, TFT_BLACK);
-        tft.drawCentreString(getVoltage(), 120, 60, 1); // Next size up font 2
-
-
-        // Update digital time
-        uint8_t xpos = 6;
-        uint8_t ypos = 0;
-        if (omm != mm) { // Only redraw every minute to minimise flicker
-            // Uncomment ONE of the next 2 lines, using the ghost image demonstrates text overlay as time is drawn over it
-            tft.setTextColor(0x39C4, TFT_BLACK);  // Leave a 7 segment ghost image, comment out next line!
-            //tft.setTextColor(TFT_BLACK, TFT_BLACK); // Set font colour to black to wipe image
-            // Font 7 is to show a pseudo 7 segment display.
-            // Font 7 only contains characters [space] 0 1 2 3 4 5 6 7 8 9 0 : .
-            tft.drawString("88:88", xpos, ypos, 7); // Overwrite the text to clear it
-            tft.setTextColor(0xFBE0, TFT_BLACK); // Orange
-            omm = mm;
-
-            if (hh < 10) xpos += tft.drawChar('0', xpos, ypos, 7);
-            xpos += tft.drawNumber(hh, xpos, ypos, 7);
-            xcolon = xpos;
-            xpos += tft.drawChar(':', xpos, ypos, 7);
-            if (mm < 10) xpos += tft.drawChar('0', xpos, ypos, 7);
-            tft.drawNumber(mm, xpos, ypos, 7);
-        }
-
-        if (ss % 2) { // Flash the colon
-            tft.setTextColor(0x39C4, TFT_BLACK);
-            xpos += tft.drawChar(':', xcolon, ypos, 7);
-            tft.setTextColor(0xFBE0, TFT_BLACK);
-        } else {
-            tft.drawChar(':', xcolon, ypos, 7);
-        }
+        client.stop();
+    }
+    else
+    {
+        client.stop();
     }
 }
-
-void IMU_Show()
-{
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextDatum(TL_DATUM);
-    readMPU9250();
-    snprintf(buff, sizeof(buff), "--  ACC  GYR   MAG");
-    tft.drawString(buff, 0, 0);
-    snprintf(buff, sizeof(buff), "x %.2f  %.2f  %.2f", (int)1000 * IMU.ax, IMU.gx, IMU.mx);
-    tft.drawString(buff, 0, 16);
-    snprintf(buff, sizeof(buff), "y %.2f  %.2f  %.2f", (int)1000 * IMU.ay, IMU.gy, IMU.my);
-    tft.drawString(buff, 0, 32);
-    snprintf(buff, sizeof(buff), "z %.2f  %.2f  %.2f", (int)1000 * IMU.az, IMU.gz, IMU.mz);
-    tft.drawString(buff, 0, 48);
-    delay(200);
-}
-
 
 void loop()
 {
+    wm.process();
 #ifdef ARDUINO_OTA_UPDATE
     ArduinoOTA.handle();
 #endif
@@ -450,18 +610,23 @@ void loop()
     if (otaStart)
         return;
 
-    if (charge_indication) {
+    if (charge_indication)
+    {
         charge_indication = false;
-        if (digitalRead(CHARGE_PIN) == LOW) {
+        if (digitalRead(CHARGE_PIN) == LOW)
+        {
             tft.pushImage(140, 55, 16, 16, charge);
-        } else {
+        }
+        else
+        {
             tft.fillRect(140, 55, 16, 16, TFT_BLACK);
         }
     }
 
-
-    if (digitalRead(TP_PIN_PIN) == HIGH) {
-        if (!pressed) {
+    if (digitalRead(TP_PIN_PIN) == HIGH)
+    {
+        if (!pressed)
+        {
             initial = 1;
             targetTime = millis() + 1000;
             tft.fillScreen(TFT_BLACK);
@@ -472,21 +637,43 @@ void loop()
             digitalWrite(LED_PIN, LOW);
             pressed = true;
             pressedTime = millis();
-        } else {
-            if (millis() - pressedTime > 3000) {
+        }
+        else
+        {
+            if (millis() - pressedTime > 3000)
+            {
                 tft.fillScreen(TFT_BLACK);
-                tft.drawString("Reset WiFi Setting",  20, tft.height() / 2 );
+                tft.drawString("Reset WiFi Setting", 20, tft.height() / 2);
                 delay(3000);
-                wifiManager.resetSettings();
-                wifiManager.erase(true);
+                // wifiManager.resetSettings();
+                // wifiManager.erase(true);
                 esp_restart();
             }
         }
-    } else {
+    }
+    else
+    {
         pressed = false;
     }
+    if (isWiFiConfigMode)
+    {
+        tft.setTextColor(TFT_CYAN, TFT_BLACK);
+        wifi_config_t conf_current;
+        esp_wifi_get_config(WIFI_IF_AP, &conf_current);
+        snprintf(buff, sizeof(buff), "%s %s", WiFi.softAPIP().toString().c_str(), conf_current.ap.ssid);
+        tft.drawString(buff, 1, 1);
+    }
+    else
+    {
+        tft.setTextColor(TFT_GOLD, TFT_BLACK);
+        snprintf(buff, sizeof(buff), "%s %s", WiFi.localIP().toString().c_str(), WiFi.SSID().c_str());
+        tft.drawString(buff, 1, 1);
+        // 向主机发送IMU数据
+        sendIMUData();
+    }
 
-    switch (func_select) {
+    switch (func_select)
+    {
     case 0:
         RTC_Show();
         break;
@@ -496,7 +683,7 @@ void loop()
     case 2:
         tft.setTextColor(TFT_GREEN, TFT_BLACK);
         tft.setTextDatum(MC_DATUM);
-        tft.drawString("Press again to wake up",  tft.width() / 2, tft.height() / 2 );
+        tft.drawString("Press again to wake up", tft.width() / 2, tft.height() / 2);
         IMU.setSleepEnabled(true);
         Serial.println("Go to Sleep");
         delay(3000);

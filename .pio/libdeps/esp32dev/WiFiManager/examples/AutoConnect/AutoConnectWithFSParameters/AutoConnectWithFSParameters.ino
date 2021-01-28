@@ -32,9 +32,11 @@ void setupSpiffs(){
   //read configuration from FS json
   Serial.println("mounting FS...");
 
-  if (SPIFFS.begin()) {
+  if (SPIFFS.begin()) 
+  {
     Serial.println("mounted file system");
-    if (SPIFFS.exists("/config.json")) {
+    if (SPIFFS.exists("/config.json")) 
+    {
       //file exists, reading and loading
       Serial.println("reading config file");
       File configFile = SPIFFS.open("/config.json", "r");
@@ -170,6 +172,4 @@ void setup() {
 
 void loop() {
   // put your main code here, to run repeatedly:
-
-
 }
