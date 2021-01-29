@@ -268,36 +268,14 @@ void setupSpiffs()
 bool isWiFiConfigMode = false;
 //flag for saving data
 bool shouldSaveConfig = false;
-
+WiFiManagerParameter server_ip("server_ip", "Server IP Address", serverIP_str, 16);
+WiFiManagerParameter server_port("server_port", "Server Port", serverPort_str, 6);
+    
 //callback notifying us of the need to save config
 void saveConfigCallback()
 {
     Serial.println("Should save config");
     shouldSaveConfig = true;
-}
-
-void setupWiFi()
-{
-    WiFi.mode(WIFI_STA);
-    wm.setSaveConfigCallback(saveConfigCallback);
-    //wm.setConfigPortalBlocking(false);
-    WiFiManagerParameter server_ip("server_ip", "Server IP Address", serverIP_str, 16);
-    WiFiManagerParameter server_port("server_port", "Server Port", serverPort_str, 6);
-    wm.addParameter(&server_ip);
-    wm.addParameter(&server_port);
-
-    //fetches ssid and pass and tries to connect
-    //if it does not connect it starts an access point with the specified name
-    //here  "AutoConnectAP"
-    //and goes into a blocking loop awaiting configuration
-    if (!wm.autoConnect())
-    {
-        Serial.println("failed to connect and hit timeout");
-        //reset and try again, or maybe put it to deep sleep
-        isWiFiConfigMode = true;
-        return;
-    }
-
     //read updated parameters
     strcpy(serverIP_str, server_ip.getValue());
     strcpy(serverPort_str, server_port.getValue());
@@ -322,7 +300,34 @@ void setupWiFi()
         //end save
         shouldSaveConfig = false;
     }
+}
 
+void setupWiFi()
+{
+    WiFi.mode(WIFI_STA);
+
+    server_ip.setValue(serverIP_str, 16);
+    server_port.setValue(serverPort_str, 6);
+    
+    wm.addParameter(&server_ip);
+    wm.addParameter(&server_port);
+
+    wm.setConfigPortalBlocking(false);
+    wm.setSaveConfigCallback(saveConfigCallback);
+
+    //fetches ssid and pass and tries to connect
+    //if it does not connect it starts an access point with the specified name
+    //here  "AutoConnectAP"
+    //and goes into a blocking loop awaiting configuration
+    if (!wm.autoConnect())
+    {
+        Serial.println("failed to connect and hit timeout");
+        //reset and try again, or maybe put it to deep sleep
+        isWiFiConfigMode = true;
+    }
+
+    if(!isWiFiConfigMode)
+{
     //if you get here you have connected to the WiFi
     Serial.printf("connected to %s \r\n", wm.getWiFiSSID().c_str());
 
@@ -337,6 +342,7 @@ void setupWiFi()
     Serial.println(&timeinfo, "%A, %Y-%m-%d %H:%M:%S");
     // 把对时保存到RTC
     rtc.setDateTime(timeinfo.tm_year, timeinfo.tm_mon, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+}
 }
 
 void setupOTA()
@@ -470,7 +476,7 @@ void RTC_Show()
 
         // Update digital time
         uint8_t xpos = 6;
-        uint8_t ypos = 13;
+        uint8_t ypos = 19;
         if (omm != mm)
         { // Only redraw every minute to minimise flicker
             // Uncomment ONE of the next 2 lines, using the ghost image demonstrates text overlay as time is drawn over it
@@ -588,7 +594,7 @@ void sendIMUData()
         if (client.connected())
         {
             readMPU9250();
-            snprintf(buff, sizeof(buff), "%llx,%f,%f,%f,%f,%f,%f,%f,%f,%f\r\n", ESP.getEfuseMac(), IMU.ax, IMU.ay, IMU.az, IMU.gx, IMU.gy, IMU.gz, IMU.mx, IMU.my, IMU.mz);
+            snprintf(buff, sizeof(buff), "%llx,%f,%f,%f,%f,%f,%f,%f,%f,%f\n", ESP.getEfuseMac(), IMU.ax, IMU.ay, IMU.az, IMU.gx, IMU.gy, IMU.gz, IMU.mx, IMU.my, IMU.mz);
             client.write(buff);
         }
         client.stop();
@@ -615,11 +621,11 @@ void loop()
         charge_indication = false;
         if (digitalRead(CHARGE_PIN) == LOW)
         {
-            tft.pushImage(140, 55, 16, 16, charge);
+            tft.pushImage(142, 64, 16, 16, charge);
         }
         else
         {
-            tft.fillRect(140, 55, 16, 16, TFT_BLACK);
+            tft.fillRect(142, 64, 16, 16, TFT_BLACK);
         }
     }
 
@@ -631,7 +637,7 @@ void loop()
             targetTime = millis() + 1000;
             tft.fillScreen(TFT_BLACK);
             omm = 99;
-            func_select = func_select + 1 > 2 ? 0 : func_select + 1;
+            func_select = func_select + 1 > 1 ? 0 : func_select + 1;
             digitalWrite(LED_PIN, HIGH);
             delay(100);
             digitalWrite(LED_PIN, LOW);
@@ -668,6 +674,11 @@ void loop()
         tft.setTextColor(TFT_GOLD, TFT_BLACK);
         snprintf(buff, sizeof(buff), "%s %s", WiFi.localIP().toString().c_str(), WiFi.SSID().c_str());
         tft.drawString(buff, 1, 1);
+        
+        tft.setTextColor(TFT_BLUE, TFT_BLACK);
+        snprintf(buff, sizeof(buff), "Server %s:%d", serverIP.toString().c_str(), serverPort);
+        tft.drawString(buff, 1, 10);
+
         // 向主机发送IMU数据
         sendIMUData();
     }
@@ -678,9 +689,6 @@ void loop()
         RTC_Show();
         break;
     case 1:
-        IMU_Show();
-        break;
-    case 2:
         tft.setTextColor(TFT_GREEN, TFT_BLACK);
         tft.setTextDatum(MC_DATUM);
         tft.drawString("Press again to wake up", tft.width() / 2, tft.height() / 2);
